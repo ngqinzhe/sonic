@@ -60,3 +60,41 @@ size_t lspace(const char *sp, size_t nb, size_t p) {
     /* all the characters are spaces */
     return sp - ss;
 }
+
+#ifdef _MSC_VER
+#include <xmmintrin.h>
+#include <mmintrin.h>
+#include <immintrin.h>
+#else
+#include <x86intrin.h>
+#endif
+#include "mask_table.h"
+
+size_t simd_json_compact(char* bytes, size_t len) {
+    size_t pos = 0;
+    __m128i spaces = _mm_set1_epi8(' ');
+    __m128i newline = _mm_set1_epi8('\n');
+    __m128i carriage = _mm_set1_epi8('\r');
+    size_t i = 0;
+    // vectorization
+    for (; i + 15 < len; i += 16) {
+        __m128i x = _mm_loadu_si128((const __m128i*)(bytes + i));
+        __m128i xspaces = _mm_cmpeq_epi8(x, spaces);
+        __m128i xnewline = _mm_cmpeq_epi8(x, newline);
+        __m128i xcarriage = _mm_cmpeq_epi8(x, carriage);
+        __m128i anywhite = _mm_or_si128(_mm_or_si128(xspaces, xnewline), xcarriage);
+        uint64_t mask16 = _mm_movemask_epi8(anywhite);
+        x = _mm_shuffle_epi8(x, *((__m128i*)despace_mask16 + (mask16 & 0x7fff)));
+        _mm_storeu_si128((__m128i*)(bytes + pos), x);
+        pos += 16 - _mm_popcnt_u32(mask16);
+    }
+
+    // remaining < 16 bit scalar processing
+    for (; i < len; ++i) {
+        char c = bytes[i];
+        if (c == '\r' || c == '\n' || c == ' ')
+            continue;
+        bytes[pos++] = c;
+    }
+    return pos;
+}
